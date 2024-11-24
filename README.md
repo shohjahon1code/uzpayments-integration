@@ -292,9 +292,9 @@ We welcome contributions! Please follow these steps:
 ## Support
 
 For support, please:
-1. Check the [GitHub Issues](https://github.com/yourusername/payment-integration/issues)
-2. Join our [Discord Community](https://discord.gg/yourdiscord)
-3. Email us at support@yourcompany.com
+1. Check the [GitHub Issues](https://github.com/uzpayments/uzpayments-nest/issues)
+2. Join our [Discord Community](https://discord.gg/uzpayments)
+3. Email us at support@uzpayments.uz
 
 ## License
 
