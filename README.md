@@ -99,6 +99,196 @@ const createPayment = async () => {
 };
 ```
 
+## NestJS Integration
+
+First, create a payment module:
+
+```typescript
+// payment.module.ts
+import { Module } from '@nestjs/common';
+import { PaymentService } from './payment.service';
+import { PaymentController } from './payment.controller';
+
+@Module({
+  providers: [PaymentService],
+  controllers: [PaymentController],
+  exports: [PaymentService],
+})
+export class PaymentModule {}
+```
+
+Create a payment service:
+
+```typescript
+// payment.service.ts
+import { Injectable } from '@nestjs/common';
+import { PaymeProvider, ClickProvider } from 'uzpayments-integration';
+import { ConfigService } from '@nestjs/config';
+
+@Injectable()
+export class PaymentService {
+  private readonly paymeProvider: PaymeProvider;
+  private readonly clickProvider: ClickProvider;
+
+  constructor(private configService: ConfigService) {
+    this.paymeProvider = new PaymeProvider({
+      merchant_id: this.configService.get('PAYME_MERCHANT_ID'),
+      secret_key: this.configService.get('PAYME_KEY'),
+      test_mode: this.configService.get('NODE_ENV') !== 'production',
+    });
+
+    this.clickProvider = new ClickProvider({
+      merchant_id: this.configService.get('CLICK_MERCHANT_ID'),
+      service_id: this.configService.get('CLICK_SERVICE_ID'),
+      secret_key: this.configService.get('CLICK_SECRET'),
+      test_mode: this.configService.get('NODE_ENV') !== 'production',
+    });
+  }
+
+  async createPaymePayment(orderId: string, amount: number) {
+    return this.paymeProvider.createPayment({
+      id: orderId,
+      amount: { amount },
+      return_url: 'https://your-site.com/success',
+      cancel_url: 'https://your-site.com/cancel',
+    });
+  }
+
+  async createClickPayment(orderId: string, amount: number) {
+    return this.clickProvider.createPayment({
+      id: orderId,
+      amount: { amount },
+      return_url: 'https://your-site.com/success',
+    });
+  }
+
+  async verifyPayment(provider: 'payme' | 'click', transactionId: string) {
+    if (provider === 'payme') {
+      return this.paymeProvider.verifyPayment(transactionId);
+    }
+    return this.clickProvider.verifyPayment(transactionId);
+  }
+}
+```
+
+Create a payment controller:
+
+```typescript
+// payment.controller.ts
+import { Controller, Post, Body, Get, Param } from '@nestjs/common';
+import { PaymentService } from './payment.service';
+
+@Controller('payments')
+export class PaymentController {
+  constructor(private readonly paymentService: PaymentService) {}
+
+  @Post('payme/create')
+  async createPaymePayment(@Body() data: { orderId: string; amount: number }) {
+    const result = await this.paymentService.createPaymePayment(
+      data.orderId,
+      data.amount
+    );
+    return result;
+  }
+
+  @Post('click/create')
+  async createClickPayment(@Body() data: { orderId: string; amount: number }) {
+    const result = await this.paymentService.createClickPayment(
+      data.orderId,
+      data.amount
+    );
+    return result;
+  }
+
+  @Get(':provider/verify/:transactionId')
+  async verifyPayment(
+    @Param('provider') provider: 'payme' | 'click',
+    @Param('transactionId') transactionId: string
+  ) {
+    return this.paymentService.verifyPayment(provider, transactionId);
+  }
+
+  // Webhook endpoints
+  @Post('payme/webhook')
+  async handlePaymeWebhook(@Body() payload: any) {
+    // Handle Payme notification
+    const { transaction_id, state } = payload;
+    
+    // Verify payment status
+    const result = await this.paymentService.verifyPayment('payme', transaction_id);
+    if (result.success) {
+      // Update your order status in database
+      // Send confirmation to customer
+    }
+    
+    return { success: true };
+  }
+
+  @Post('click/webhook')
+  async handleClickWebhook(@Body() payload: any) {
+    // Handle Click notification
+    const { transaction_id } = payload;
+    
+    // Verify payment status
+    const result = await this.paymentService.verifyPayment('click', transaction_id);
+    if (result.success) {
+      // Update your order status in database
+      // Send confirmation to customer
+    }
+    
+    return { success: true };
+  }
+}
+```
+
+Usage in your application:
+
+```typescript
+// app.module.ts
+import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import { PaymentModule } from './payment/payment.module';
+
+@Module({
+  imports: [
+    ConfigModule.forRoot(),
+    PaymentModule,
+  ],
+})
+export class AppModule {}
+```
+
+Now you can use the payment service in your application:
+
+```typescript
+// order.service.ts
+import { Injectable } from '@nestjs/common';
+import { PaymentService } from './payment/payment.service';
+
+@Injectable()
+export class OrderService {
+  constructor(private readonly paymentService: PaymentService) {}
+
+  async createOrder(userId: string, amount: number) {
+    // Create order in database
+    const orderId = 'ORDER_' + Date.now();
+
+    // Create payment
+    const paymentResult = await this.paymentService.createPaymePayment(
+      orderId,
+      amount
+    );
+
+    if (paymentResult.success) {
+      // Redirect user to payment page
+      return { redirectUrl: paymentResult.payment_url };
+    }
+
+    throw new Error('Payment creation failed');
+  }
+}
+```
+
 ## Error Handling
 
 The package includes comprehensive error handling:
@@ -210,73 +400,6 @@ interface CreatePaymentOptions {
   amount: { amount: number };
   return_url: string;
 }
-```
-
-## Webhook Integration
-
-To handle payment notifications, set up webhook endpoints in your NestJS application:
-
-```typescript
-import { Controller, Post, Body } from '@nestjs/common';
-import { PaymeProvider, ClickProvider } from '@uzpayments/payment-integration';
-
-@Controller('webhooks')
-export class WebhooksController {
-  constructor(
-    private readonly paymeProvider: PaymeProvider,
-    private readonly clickProvider: ClickProvider,
-  ) {}
-
-  @Post('payme')
-  async handlePaymeWebhook(@Body() payload: any) {
-    // Verify webhook signature
-    if (this.paymeProvider.verifyWebhook(payload)) {
-      // Handle payment notification
-      const { transaction_id, status } = payload;
-      // Update your database
-    }
-  }
-
-  @Post('click')
-  async handleClickWebhook(@Body() payload: any) {
-    // Verify webhook signature
-    if (this.clickProvider.verifyWebhook(payload)) {
-      // Handle payment notification
-      const { transaction_id, status } = payload;
-      // Update your database
-    }
-  }
-}
-```
-
-## Common Issues and Solutions
-
-### CORS Issues
-If you're experiencing CORS issues, ensure your NestJS application has the proper CORS configuration:
-
-```typescript
-// main.ts
-app.enableCors({
-  origin: ['https://your-frontend-domain.com'],
-  methods: ['GET', 'POST'],
-  credentials: true,
-});
-```
-
-### SSL Certificate Issues
-When using test mode, you might encounter SSL certificate issues. Make sure to:
-1. Use `https` in production
-2. Set proper SSL certificates
-3. Handle test mode certificates appropriately
-
-### Rate Limiting
-Both Payme and Click have rate limits. The package handles retries automatically, but you can configure:
-```typescript
-const provider = new PaymeProvider({
-  // ... other options
-  retries: 5,        // Increase retries
-  retry_delay: 2000  // Increase delay between retries
-});
 ```
 
 ## Contributing
