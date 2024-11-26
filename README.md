@@ -1,250 +1,499 @@
-# @uzpayments/payment-integration
+# UzPayments Integration
 
-A flexible and robust payment integration package for Uzbekistan payment systems (Payme and Click).
+A comprehensive payment integration package for Uzbekistan payment providers (Payme and Click) built for NestJS/Express applications.
+
+[![npm version](https://badge.fury.io/js/uzpayments.svg)](https://badge.fury.io/js/uzpayments)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Features
 
-- 🔒 Secure payment processing
-- ⚡ TypeScript support
-- 🔄 Automatic retries for failed requests
-- ⏱️ Configurable timeouts
-- 🛠️ Customizable error handling
-- 🧪 Comprehensive test coverage
+- 🏦 Support for major Uzbekistan payment providers:
+  - Payme
+  - Click
+- ⚡ Easy to integrate with NestJS/Express
+- 🔒 Secure payment processing with signature verification
+- 🧪 Test mode support
+- 📝 TypeScript support with comprehensive types
+- 🛠️ Comprehensive error handling
+- 🔄 Webhook support with prepare/complete flow
 
 ## Installation
 
 ```bash
-npm install @uzpayments/payment-integration
+npm install uzpayments
+# or
+yarn add uzpayments
 ```
 
-## Usage
+## Environment Variables
 
-### Payme Integration
+```env
+# Click Configuration
+CLICK_MERCHANT_ID=your_merchant_id
+CLICK_SERVICE_ID=your_service_id
+CLICK_SECRET=your_secret_key
+
+# Payme Configuration
+PAYME_MERCHANT_ID=your_merchant_id
+PAYME_LOGIN=Paycom
+PAYME_PASSWORD=your_production_password
+PAYME_PASSWORD_TEST=your_test_password
+
+# Common
+NODE_ENV=development|production
+```
+
+## Basic Usage
 
 ```typescript
-import { PaymeProvider } from '@uzpayments/payment-integration';
+import { PaymeProvider, ClickProvider } from 'uzpayments';
+import { HttpClient } from 'uzpayments/utils';
 
-// Initialize the provider
-const paymeProvider = new PaymeProvider({
-  merchant_id: 'your_merchant_id',
-  secret_key: 'your_secret_key',
-  test_mode: true, // false for production
-  timeout: 30000,  // Optional: request timeout in ms (default: 30000)
-  retries: 3,      // Optional: number of retries (default: 3)
-  retry_delay: 1000 // Optional: delay between retries in ms (default: 1000)
+// Initialize providers
+const httpClient = new HttpClient();
+
+const clickProvider = new ClickProvider(httpClient, {
+  merchant_id: process.env.CLICK_MERCHANT_ID,
+  service_id: process.env.CLICK_SERVICE_ID,
+  secret_key: process.env.CLICK_SECRET,
+  test_mode: true // Use test environment
 });
 
-// Create a payment
-const createPayment = async () => {
-  const result = await paymeProvider.createPayment({
-    id: 'order_123',
-    amount: { amount: 100000 }, // amount in UZS
-    return_url: 'https://your-site.com/success',
-    cancel_url: 'https://your-site.com/cancel'
-  });
-
-  if (result.success) {
-    // Redirect user to payment page
-    window.location.href = result.payment_url;
-  }
-};
-
-// Verify payment status
-const verifyPayment = async (transaction_id: string) => {
-  const result = await paymeProvider.verifyPayment(transaction_id);
-  
-  if (result.success) {
-    console.log('Payment status:', result.status);
-    console.log('Paid amount:', result.paid_amount);
-    console.log('Paid time:', result.paid_time);
-  }
-};
-
-// Cancel payment
-const cancelPayment = async (transaction_id: string) => {
-  const result = await paymeProvider.cancelPayment(transaction_id);
-  
-  if (result.success) {
-    console.log('Payment cancelled successfully');
-  }
-};
-```
-
-### Click Integration
-
-```typescript
-import { ClickProvider } from '@uzpayments/payment-integration';
-
-// Initialize the provider
-const clickProvider = new ClickProvider({
-  merchant_id: 'your_merchant_id',
-  service_id: 'your_service_id',
-  secret_key: 'your_secret_key',
-  test_mode: true, // false for production
-  timeout: 30000,  // Optional: request timeout in ms
-  retries: 3       // Optional: number of retries
+const paymeProvider = new PaymeProvider(httpClient, {
+  merchant_id: process.env.PAYME_MERCHANT_ID,
+  password: process.env.PAYME_PASSWORD,
+  test_mode: true
 });
 
-// Create a payment
-const createPayment = async () => {
-  const result = await clickProvider.createPayment({
-    id: 'order_123',
-    amount: { amount: 100000 }, // amount in UZS
-    return_url: 'https://your-site.com/success'
-  });
-
-  if (result.success) {
-    window.location.href = result.payment_url;
+// Create payment order
+const order = {
+  id: 'order_123',
+  amount: {
+    amount: 100000, // Amount in UZS
+    currency: 'UZS'
+  },
+  description: 'Payment for Order #123',
+  return_url: 'https://your-site.com/payment/success',
+  extra_params: {
+    user_id: 'user_123'
   }
 };
+
+// Generate payment URLs
+const clickUrl = clickProvider.generatePaymentUrl(order);
+const paymeUrl = paymeProvider.generatePaymentUrl(order);
+
+// Verify payments
+const clickResult = await clickProvider.verifyPayment('transaction_id');
+const paymeResult = await paymeProvider.verifyPayment('transaction_id');
 ```
 
-## NestJS Integration
+## Webhook Integration
 
-First, create a payment module:
+### Click Webhooks
+
+Click uses a prepare/complete flow for payment processing:
 
 ```typescript
-// payment.module.ts
+app.post('/webhooks/click', async (req, res) => {
+  const result = await clickProvider.handleWebhook(req.body);
+  
+  // Webhook will receive two types of requests:
+  // 1. Prepare (action = 0): Initial payment validation
+  // 2. Complete (action = 1): Payment completion
+  
+  // Result includes:
+  // - click_trans_id: Click transaction ID
+  // - merchant_trans_id: Your order ID
+  // - merchant_prepare_id: Prepare request ID (for action = 0)
+  // - merchant_confirm_id: Confirm request ID (for action = 1)
+  // - error: Error code (0 for success)
+  // - error_note: Error message
+  
+  res.json(result);
+});
+```
+
+Click webhook request format:
+```typescript
+interface ClickWebhookRequest {
+  click_trans_id: string;
+  service_id: string;
+  click_paydoc_id: string;
+  merchant_trans_id: string;
+  amount: string;
+  action: number;  // 0: prepare, 1: complete
+  sign_time: string;
+  sign_string: string;
+  error?: number;
+  error_note?: string;
+}
+```
+
+### Payme Webhooks
+
+Payme uses a JSON-RPC style API for webhooks:
+
+```typescript
+app.post('/webhooks/payme', async (req, res) => {
+  const result = await paymeProvider.handleWebhook(req.body);
+  
+  // Webhook handles multiple methods:
+  // - CheckPerformTransaction: Validate payment
+  // - CreateTransaction: Create payment
+  // - PerformTransaction: Complete payment
+  // - CancelTransaction: Cancel payment
+  // - CheckTransaction: Check status
+  // - GetStatement: Get transactions list
+  
+  res.json(result);
+});
+```
+
+## Error Handling
+
+Both providers use comprehensive error codes:
+
+### Click Error Codes
+```typescript
+enum ClickErrorCodes {
+  Success = 0,
+  SignatureFailure = -1,
+  InvalidAmount = -2,
+  ActionNotFound = -3,
+  AlreadyPaid = -4,
+  UserNotFound = -5,
+  TransactionNotFound = -6,
+  BadRequest = -8,
+  TransactionCanceled = -9
+}
+```
+
+### Payme Error Codes
+```typescript
+enum PaymeErrorCodes {
+  InvalidAmount = -31001,
+  InvalidAccount = -31050,
+  MethodNotFound = -32601,
+  TransactionNotFound = -31003,
+  CantPerformTransaction = -31008,
+  CantCancelTransaction = -31007,
+  TransactionAlreadyExists = -31051,
+  AuthorizationFailure = -32504,
+  InternalError = -32400
+}
+```
+
+## Testing
+
+Both providers support test environments:
+
+### Click Test Environment
+- Test URL: https://test.click.uz
+- Use test credentials provided by Click
+- Set `test_mode: true` in provider config
+
+### Payme Test Environment
+- Test URL: https://test.paycom.uz
+- Use test password from your merchant cabinet
+- Set `test_mode: true` in provider config
+
+## Security Considerations
+
+1. **Signature Verification**
+   - Both providers implement signature verification for webhooks
+   - Click uses MD5 hash with secret key
+   - Payme uses Basic Auth with merchant credentials
+
+2. **Environment Variables**
+   - Never expose credentials in code
+   - Use different credentials for test/production
+   - Store sensitive data in secure environment variables
+
+3. **HTTPS**
+   - Always use HTTPS in production
+   - Both providers require HTTPS for webhooks
+   - Verify SSL certificates in production
+
+4. **Error Handling**
+   - Implement proper error logging
+   - Never expose internal errors to clients
+   - Handle timeout and network errors gracefully
+
+5. **Amount Validation**
+   - Validate payment amounts
+   - Click uses UZS directly
+   - Payme requires conversion to tiyin (UZS * 100)
+
+## NestJS Integration Guide
+
+### 1. Create Payment Module
+
+```typescript
+// src/payment/payment.module.ts
 import { Module } from '@nestjs/common';
 import { PaymentService } from './payment.service';
 import { PaymentController } from './payment.controller';
+import { HttpClient } from 'uzpayments/utils';
+import { PaymeProvider, ClickProvider } from 'uzpayments';
 
 @Module({
-  providers: [PaymentService],
+  providers: [
+    PaymentService,
+    {
+      provide: HttpClient,
+      useValue: new HttpClient(),
+    },
+    {
+      provide: PaymeProvider,
+      useFactory: (httpClient: HttpClient) => {
+        return new PaymeProvider(httpClient, {
+          merchant_id: process.env.PAYME_MERCHANT_ID,
+          password: process.env.PAYME_PASSWORD,
+          test_mode: process.env.NODE_ENV !== 'production',
+        });
+      },
+      inject: [HttpClient],
+    },
+    {
+      provide: ClickProvider,
+      useFactory: (httpClient: HttpClient) => {
+        return new ClickProvider(httpClient, {
+          merchant_id: process.env.CLICK_MERCHANT_ID,
+          service_id: process.env.CLICK_SERVICE_ID,
+          secret_key: process.env.CLICK_SECRET,
+          test_mode: process.env.NODE_ENV !== 'production',
+        });
+      },
+      inject: [HttpClient],
+    },
+  ],
   controllers: [PaymentController],
   exports: [PaymentService],
 })
 export class PaymentModule {}
 ```
 
-Create a payment service:
+### 2. Create Payment Service
 
 ```typescript
-// payment.service.ts
+// src/payment/payment.service.ts
 import { Injectable } from '@nestjs/common';
-import { PaymeProvider, ClickProvider } from 'uzpayments-integration';
-import { ConfigService } from '@nestjs/config';
+import { PaymeProvider, ClickProvider } from 'uzpayments';
+import { 
+  PaymentOrder, 
+  PaymentResult, 
+  PaymentVerifyResult 
+} from 'uzpayments/interfaces';
 
 @Injectable()
 export class PaymentService {
-  private readonly paymeProvider: PaymeProvider;
-  private readonly clickProvider: ClickProvider;
+  constructor(
+    private readonly paymeProvider: PaymeProvider,
+    private readonly clickProvider: ClickProvider,
+  ) {}
 
-  constructor(private configService: ConfigService) {
-    this.paymeProvider = new PaymeProvider({
-      merchant_id: this.configService.get('PAYME_MERCHANT_ID'),
-      secret_key: this.configService.get('PAYME_KEY'),
-      test_mode: this.configService.get('NODE_ENV') !== 'production',
-    });
-
-    this.clickProvider = new ClickProvider({
-      merchant_id: this.configService.get('CLICK_MERCHANT_ID'),
-      service_id: this.configService.get('CLICK_SERVICE_ID'),
-      secret_key: this.configService.get('CLICK_SECRET'),
-      test_mode: this.configService.get('NODE_ENV') !== 'production',
-    });
-  }
-
-  async createPaymePayment(orderId: string, amount: number) {
-    return this.paymeProvider.createPayment({
-      id: orderId,
-      amount: { amount },
-      return_url: 'https://your-site.com/success',
-      cancel_url: 'https://your-site.com/cancel',
-    });
-  }
-
-  async createClickPayment(orderId: string, amount: number) {
-    return this.clickProvider.createPayment({
-      id: orderId,
-      amount: { amount },
-      return_url: 'https://your-site.com/success',
-    });
-  }
-
-  async verifyPayment(provider: 'payme' | 'click', transactionId: string) {
-    if (provider === 'payme') {
-      return this.paymeProvider.verifyPayment(transactionId);
+  async createPayment(
+    provider: 'payme' | 'click',
+    order: PaymentOrder,
+  ): Promise<PaymentResult> {
+    const paymentProvider = 
+      provider === 'payme' ? this.paymeProvider : this.clickProvider;
+    
+    try {
+      const result = await paymentProvider.createPayment(order);
+      return result;
+    } catch (error) {
+      throw new Error(`Payment creation failed: ${error.message}`);
     }
-    return this.clickProvider.verifyPayment(transactionId);
+  }
+
+  async verifyPayment(
+    provider: 'payme' | 'click',
+    transactionId: string,
+  ): Promise<PaymentVerifyResult> {
+    const paymentProvider = 
+      provider === 'payme' ? this.paymeProvider : this.clickProvider;
+    
+    try {
+      const result = await paymentProvider.verifyPayment(transactionId);
+      return result;
+    } catch (error) {
+      throw new Error(`Payment verification failed: ${error.message}`);
+    }
+  }
+
+  async cancelPayment(
+    provider: 'payme' | 'click',
+    transactionId: string,
+  ): Promise<PaymentResult> {
+    const paymentProvider = 
+      provider === 'payme' ? this.paymeProvider : this.clickProvider;
+    
+    try {
+      const result = await paymentProvider.cancelPayment(transactionId);
+      return result;
+    } catch (error) {
+      throw new Error(`Payment cancellation failed: ${error.message}`);
+    }
+  }
+
+  generatePaymentUrl(
+    provider: 'payme' | 'click',
+    order: PaymentOrder,
+  ): string {
+    const paymentProvider = 
+      provider === 'payme' ? this.paymeProvider : this.clickProvider;
+    return paymentProvider.generatePaymentUrl(order);
   }
 }
 ```
 
-Create a payment controller:
+### 3. Create Payment Controller
 
 ```typescript
-// payment.controller.ts
-import { Controller, Post, Body, Get, Param } from '@nestjs/common';
+// src/payment/payment.controller.ts
+import {
+  Controller,
+  Post,
+  Body,
+  Param,
+  Get,
+  Query,
+  HttpException,
+  HttpStatus,
+} from '@nestjs/common';
 import { PaymentService } from './payment.service';
+import { PaymeProvider, ClickProvider } from 'uzpayments';
+import { PaymentOrder } from 'uzpayments/interfaces';
 
 @Controller('payments')
 export class PaymentController {
-  constructor(private readonly paymentService: PaymentService) {}
+  constructor(
+    private readonly paymentService: PaymentService,
+    private readonly paymeProvider: PaymeProvider,
+    private readonly clickProvider: ClickProvider,
+  ) {}
 
-  @Post('payme/create')
-  async createPaymePayment(@Body() data: { orderId: string; amount: number }) {
-    const result = await this.paymentService.createPaymePayment(
-      data.orderId,
-      data.amount
-    );
-    return result;
-  }
-
-  @Post('click/create')
-  async createClickPayment(@Body() data: { orderId: string; amount: number }) {
-    const result = await this.paymentService.createClickPayment(
-      data.orderId,
-      data.amount
-    );
-    return result;
+  @Post(':provider/create')
+  async createPayment(
+    @Param('provider') provider: 'payme' | 'click',
+    @Body() order: PaymentOrder,
+  ) {
+    try {
+      const result = await this.paymentService.createPayment(provider, order);
+      return result;
+    } catch (error) {
+      throw new HttpException(
+        error.message,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
   }
 
   @Get(':provider/verify/:transactionId')
   async verifyPayment(
     @Param('provider') provider: 'payme' | 'click',
-    @Param('transactionId') transactionId: string
+    @Param('transactionId') transactionId: string,
   ) {
-    return this.paymentService.verifyPayment(provider, transactionId);
+    try {
+      const result = await this.paymentService.verifyPayment(
+        provider,
+        transactionId,
+      );
+      return result;
+    } catch (error) {
+      throw new HttpException(
+        error.message,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
   }
 
-  // Webhook endpoints
   @Post('payme/webhook')
-  async handlePaymeWebhook(@Body() payload: any) {
-    // Handle Payme notification
-    const { transaction_id, state } = payload;
-    
-    // Verify payment status
-    const result = await this.paymentService.verifyPayment('payme', transaction_id);
-    if (result.success) {
-      // Update your order status in database
-      // Send confirmation to customer
+  async paymeWebhook(@Body() request: any) {
+    try {
+      const result = await this.paymeProvider.handleWebhook(request);
+      return result;
+    } catch (error) {
+      throw new HttpException(
+        error.message,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
-    
-    return { success: true };
   }
 
   @Post('click/webhook')
-  async handleClickWebhook(@Body() payload: any) {
-    // Handle Click notification
-    const { transaction_id } = payload;
-    
-    // Verify payment status
-    const result = await this.paymentService.verifyPayment('click', transaction_id);
-    if (result.success) {
-      // Update your order status in database
-      // Send confirmation to customer
+  async clickWebhook(@Body() request: any) {
+    try {
+      const result = await this.clickProvider.handleWebhook(request);
+      return result;
+    } catch (error) {
+      throw new HttpException(
+        error.message,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
-    
-    return { success: true };
+  }
+
+  @Get(':provider/payment-url')
+  generatePaymentUrl(
+    @Param('provider') provider: 'payme' | 'click',
+    @Query() order: PaymentOrder,
+  ) {
+    try {
+      const paymentUrl = this.paymentService.generatePaymentUrl(provider, order);
+      return { payment_url: paymentUrl };
+    } catch (error) {
+      throw new HttpException(
+        error.message,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
   }
 }
 ```
 
-Usage in your application:
+### 4. Create DTOs (Optional but Recommended)
 
 ```typescript
-// app.module.ts
+// src/payment/dto/create-payment.dto.ts
+import { IsString, IsNumber, IsOptional, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+
+class AmountDto {
+  @IsNumber()
+  amount: number;
+
+  @IsString()
+  currency: string;
+}
+
+export class CreatePaymentDto {
+  @IsString()
+  id: string;
+
+  @ValidateNested()
+  @Type(() => AmountDto)
+  amount: AmountDto;
+
+  @IsString()
+  @IsOptional()
+  description?: string;
+
+  @IsString()
+  @IsOptional()
+  return_url?: string;
+
+  @IsOptional()
+  extra_params?: Record<string, any>;
+}
+```
+
+### 5. Usage in Your Application
+
+```typescript
+// src/app.module.ts
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { PaymentModule } from './payment/payment.module';
@@ -258,167 +507,323 @@ import { PaymentModule } from './payment/payment.module';
 export class AppModule {}
 ```
 
-Now you can use the payment service in your application:
+### 6. Example Usage in Another Service
 
 ```typescript
-// order.service.ts
+// src/orders/orders.service.ts
 import { Injectable } from '@nestjs/common';
-import { PaymentService } from './payment/payment.service';
+import { PaymentService } from '../payment/payment.service';
 
 @Injectable()
-export class OrderService {
+export class OrdersService {
   constructor(private readonly paymentService: PaymentService) {}
 
-  async createOrder(userId: string, amount: number) {
-    // Create order in database
-    const orderId = 'ORDER_' + Date.now();
+  async createOrderWithPayment(orderData: any) {
+    // Create order in your database
+    const order = await this.createOrder(orderData);
 
     // Create payment
-    const paymentResult = await this.paymentService.createPaymePayment(
-      orderId,
-      amount
+    const paymentOrder = {
+      id: order.id,
+      amount: {
+        amount: order.total,
+        currency: 'UZS',
+      },
+      description: `Payment for Order #${order.id}`,
+      return_url: `https://your-site.com/orders/${order.id}/success`,
+      extra_params: {
+        user_id: order.userId,
+      },
+    };
+
+    // Generate payment URL
+    const paymentUrl = this.paymentService.generatePaymentUrl(
+      'payme',
+      paymentOrder,
     );
 
-    if (paymentResult.success) {
-      // Redirect user to payment page
-      return { redirectUrl: paymentResult.payment_url };
+    return {
+      order,
+      payment_url: paymentUrl,
+    };
+  }
+
+  async handlePaymentWebhook(provider: 'payme' | 'click', webhookData: any) {
+    // Verify payment
+    const paymentResult = await this.paymentService.verifyPayment(
+      provider,
+      webhookData.transaction_id,
+    );
+
+    if (paymentResult.success && paymentResult.status === 'completed') {
+      // Update order status in your database
+      await this.updateOrderStatus(paymentResult.transaction_id, 'paid');
     }
 
-    throw new Error('Payment creation failed');
+    return paymentResult;
   }
 }
 ```
 
-## Error Handling
+### 7. API Endpoints
 
-The package includes comprehensive error handling:
+After setting up the payment module, you'll have the following endpoints available:
 
-```typescript
-try {
-  const result = await paymeProvider.verifyPayment('transaction_id');
-  if (!result.success) {
-    console.error('Error:', result.error?.code, result.error?.message);
-  }
-} catch (error) {
-  console.error('Unexpected error:', error);
-}
+```
+POST /payments/:provider/create
+- Create a new payment
+- Providers: 'payme' or 'click'
+- Body: PaymentOrder object
+
+GET /payments/:provider/verify/:transactionId
+- Verify payment status
+- Providers: 'payme' or 'click'
+
+POST /payments/payme/webhook
+- Handle Payme webhook callbacks
+
+POST /payments/click/webhook
+- Handle Click webhook callbacks
+
+GET /payments/:provider/payment-url
+- Generate payment URL
+- Providers: 'payme' or 'click'
+- Query params: PaymentOrder object
 ```
 
-Error codes:
-- `PAYMENT_CREATE_ERROR`: Error creating payment
-- `PAYMENT_VERIFY_ERROR`: Error verifying payment
-- `PAYMENT_CANCEL_ERROR`: Error cancelling payment
-- `PAYMENT_TIMEOUT`: Request timeout
+## Quick Start
 
-## Environment Variables
-
-You can use environment variables for configuration:
+### 1. Configure Environment Variables
 
 ```env
+# Payme Configuration
 PAYME_MERCHANT_ID=your_merchant_id
-PAYME_KEY=your_secret_key
+PAYME_LOGIN=Paycom
+PAYME_PASSWORD=your_production_password
+PAYME_PASSWORD_TEST=your_test_password
+
+# Click Configuration
 CLICK_MERCHANT_ID=your_merchant_id
 CLICK_SERVICE_ID=your_service_id
-CLICK_SECRET=your_secret_key
-NODE_ENV=development
+CLICK_SECRET_KEY=your_secret_key
+
+# Common
+NODE_ENV=development|production
 ```
 
-## Development
+### 2. Basic Usage
 
-```bash
-# Install dependencies
-npm install
+```typescript
+import { PaymeProvider, ClickProvider } from 'uzpayments';
+import { HttpClient } from 'uzpayments/utils';
 
-# Run tests
-npm test
+// Initialize providers
+const httpClient = new HttpClient();
 
-# Build
-npm run build
+const paymeProvider = new PaymeProvider(httpClient, {
+  merchant_id: process.env.PAYME_MERCHANT_ID,
+  password: process.env.PAYME_PASSWORD,
+  test_mode: true // Use test environment
+});
 
-# Format code
-npm run format
+const clickProvider = new ClickProvider(httpClient, {
+  merchant_id: process.env.CLICK_MERCHANT_ID,
+  service_id: process.env.CLICK_SERVICE_ID,
+  secret_key: process.env.CLICK_SECRET_KEY,
+  test_mode: true
+});
 
-# Lint code
-npm run lint
+// Create payment order
+const order = {
+  id: 'order_123',
+  amount: {
+    amount: 100000, // Amount in UZS
+    currency: 'UZS'
+  },
+  description: 'Payment for Order #123',
+  return_url: 'https://your-site.com/payment/success',
+  extra_params: {
+    user_id: 'user_123'
+  }
+};
+
+// Generate payment URLs
+const paymeUrl = paymeProvider.generatePaymentUrl(order);
+const clickUrl = clickProvider.generatePaymentUrl(order);
+
+// Verify payments
+const paymeResult = await paymeProvider.verifyPayment('transaction_id');
+const clickResult = await clickProvider.verifyPayment('transaction_id');
+```
+
+### 3. Webhook Handling
+
+```typescript
+// Payme Webhook
+app.post('/webhooks/payme', async (req, res) => {
+  const result = await paymeProvider.handleWebhook(req.body);
+  res.json(result);
+});
+
+// Click Webhook
+app.post('/webhooks/click', async (req, res) => {
+  const result = await clickProvider.handleWebhook(req.body);
+  res.json(result);
+});
 ```
 
 ## API Reference
 
 ### PaymeProvider
 
-#### Methods
-
-| Method | Description |
-|--------|-------------|
-| `createPayment(options)` | Creates a new payment transaction |
-| `verifyPayment(transaction_id)` | Verifies the status of a payment |
-| `cancelPayment(transaction_id)` | Cancels a pending payment |
-
-#### Options
+#### Configuration
 
 ```typescript
-interface PaymeOptions {
-  merchant_id: string;
-  secret_key: string;
-  test_mode?: boolean;
-  timeout?: number;
-  retries?: number;
-  retry_delay?: number;
-}
-
-interface CreatePaymentOptions {
-  id: string;
-  amount: { amount: number };
-  return_url: string;
-  cancel_url: string;
+interface PaymeConfig {
+  merchant_id?: string;      // Merchant ID for payment URL generation
+  login?: string;           // Merchant login (default: 'Paycom')
+  password?: string;        // Merchant password
+  test_mode?: boolean;      // Enable test mode
+  timeout?: number;         // Request timeout in ms (default: 30000)
+  retries?: number;         // Number of retries (default: 3)
+  retry_delay?: number;     // Delay between retries in ms (default: 1000)
 }
 ```
+
+#### Methods
+
+- `generatePaymentUrl(order: PaymentOrder): string`
+- `createPayment(order: PaymentOrder): Promise<PaymentResult>`
+- `verifyPayment(transaction_id: string): Promise<PaymentVerifyResult>`
+- `cancelPayment(transaction_id: string): Promise<PaymentResult>`
+- `handleWebhook(request: PaymeWebhookRequest): Promise<PaymeWebhookResponse>`
 
 ### ClickProvider
 
-#### Methods
-
-| Method | Description |
-|--------|-------------|
-| `createPayment(options)` | Creates a new payment transaction |
-| `verifyPayment(transaction_id)` | Verifies the status of a payment |
-
-#### Options
+#### Configuration
 
 ```typescript
-interface ClickOptions {
-  merchant_id: string;
-  service_id: string;
-  secret_key: string;
-  test_mode?: boolean;
-  timeout?: number;
-  retries?: number;
-}
-
-interface CreatePaymentOptions {
-  id: string;
-  amount: { amount: number };
-  return_url: string;
+interface ClickConfig {
+  merchant_id?: string;     // Merchant ID
+  service_id?: string;      // Service ID
+  secret_key?: string;      // Secret key
+  test_mode?: boolean;      // Enable test mode
+  timeout?: number;         // Request timeout in ms (default: 30000)
+  retries?: number;         // Number of retries (default: 3)
+  retry_delay?: number;     // Delay between retries in ms (default: 1000)
 }
 ```
 
+#### Methods
+
+- `generatePaymentUrl(order: PaymentOrder): string`
+- `createPayment(order: PaymentOrder): Promise<PaymentResult>`
+- `verifyPayment(transaction_id: string): Promise<PaymentVerifyResult>`
+- `cancelPayment(transaction_id: string): Promise<PaymentResult>`
+- `handleWebhook(request: ClickWebhookRequest): Promise<ClickWebhookResponse>`
+
+## Common Types
+
+### PaymentOrder
+
+```typescript
+interface PaymentOrder {
+  id: string;               // Order ID
+  amount: {
+    amount: number;         // Amount in UZS
+    currency: string;       // Currency code (e.g., 'UZS')
+  };
+  description?: string;     // Order description
+  return_url?: string;      // Return URL after payment
+  extra_params?: Record<string, any>; // Additional parameters
+}
+```
+
+### PaymentResult
+
+```typescript
+interface PaymentResult {
+  success: boolean;
+  payment_url?: string;     // Payment URL for redirect
+  transaction_id?: string;  // Provider's transaction ID
+  error?: {
+    code: string;
+    message: string;
+  };
+}
+```
+
+### PaymentVerifyResult
+
+```typescript
+interface PaymentVerifyResult {
+  success: boolean;
+  transaction_id?: string;
+  status: 'pending' | 'completed' | 'cancelled' | 'failed';
+  paid_amount?: number;
+  paid_time?: Date;
+  error?: {
+    code: string;
+    message: string;
+  };
+}
+```
+
+## Error Handling
+
+The package provides detailed error information through the `error` field in responses:
+
+```typescript
+{
+  success: false,
+  error: {
+    code: 'PAYMENT_CREATE_ERROR',
+    message: 'Failed to create payment: Invalid amount'
+  }
+}
+```
+
+Common error codes:
+- `PAYMENT_CREATE_ERROR`: Error creating payment
+- `PAYMENT_VERIFY_ERROR`: Error verifying payment
+- `PAYMENT_CANCEL_ERROR`: Error cancelling payment
+- `PAYMENT_TIMEOUT`: Request timeout
+- `INVALID_AMOUNT`: Invalid payment amount
+- `INVALID_CURRENCY`: Invalid currency
+- `INVALID_SIGNATURE`: Invalid webhook signature
+
+## Testing
+
+The package supports test mode for both providers. Enable it by:
+1. Setting `test_mode: true` in provider configuration
+2. Using test credentials in environment variables
+3. Setting `NODE_ENV` to 'development'
+
+```typescript
+const provider = new PaymeProvider(httpClient, {
+  merchant_id: 'test_merchant_id',
+  password: 'test_password',
+  test_mode: true
+});
+```
+
+## Security Considerations
+
+1. Never expose your credentials in client-side code
+2. Always verify webhook signatures
+3. Use environment variables for sensitive data
+4. Implement proper error handling
+5. Use HTTPS for all API calls
+6. Keep your dependencies up to date
+
 ## Contributing
 
-We welcome contributions! Please follow these steps:
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## Support
-
-For support, please:
-1. Check the [GitHub Issues](https://github.com/uzpayments/uzpayments-nest/issues)
-2. Join our [Discord Community](https://discord.gg/uzpayments)
-3. Email us at support@uzpayments.uz
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
 ## License
 
-MIT
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Support
+
+For support, please [open an issue](https://github.com/yourusername/uzpayments/issues) or contact our support team.
